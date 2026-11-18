@@ -1,63 +1,49 @@
-"""Walk through a month at both offices and print the chat traffic and the management report.
+"""Walk through a few refills and print what everyone sees.
 
     python3 demo.py
 """
-from datetime import timedelta
 from decimal import Decimal
 
-from snack import Money, monthly_report
-from tests.helpers import RECEIPT, World
+from snack import Money
+from tests.common import RECEIPT, make_counter
+
+counter = make_counter()
+shown = 0
 
 
-def show_new_messages(w, seen):
-    for m in w.chat.messages[seen:]:
-        print(f"    [{'DM ' if m.direct else ''}{m.to}] {m.text}")
-    return len(w.chat.messages)
+def show(title):
+    global shown
+    print(f"\n{title}")
+    for to, text in counter.chat.messages[shown:]:
+        print(f"   to {to}: {text}")
+    shown = len(counter.chat.messages)
 
 
-def main():
-    w = World(present={"oslo": ["o1", "o2", "o3"], "blr": ["b1", "b2", "b3", "b4", "o4"]})  # o4 visiting Bengaluru
-    seen = 0
+oslo = counter.report_empty("oslo")
+show("1. Oslo box reported empty")
 
-    print("1. Oslo box empty; o1 is asked, ignores it, offer moves to o2")
-    r = w.svc.report_empty("oslo", "o3")
-    w.svc.report_empty("oslo", "o2")  # duplicate report, ignored
-    w.clock.advance(timedelta(hours=2))
-    w.svc.tick()
-    seen = show_new_messages(w, seen)
+counter.clock.advance(hours=2)
+counter.check_timeouts()
+show("2. o1 didn't reply in 2 hours")
 
-    print("2. o2 accepts and buys")
-    w.svc.accept(r.id, "o2")
-    w.svc.record_purchase(r.id, "o2", Money(980, "NOK"), RECEIPT, ["chips", "fruit", "chocolate"])
-    seen = show_new_messages(w, seen)
+counter.accept(oslo.id, "o2")
+counter.record_purchase(oslo.id, "o2", Money(980, "NOK"), RECEIPT)
+show("3. o2 accepts and buys")
 
-    print("3. Bengaluru empty; b1 commits but never buys; handed to b2")
-    r2 = w.svc.report_empty("blr", "b3")
-    w.svc.accept(r2.id, r2.offered_to)
-    w.clock.advance(timedelta(hours=24))
-    w.svc.tick()
-    w.svc.accept(r2.id, r2.offered_to)
-    w.svc.record_purchase(r2.id, r2.buyer_id, Money(2400, "INR"), RECEIPT, ["samosa", "biscuits"])
-    seen = show_new_messages(w, seen)
+blr = counter.report_empty("blr")
+counter.accept(blr.id, "b1")
+counter.clock.advance(hours=24)
+counter.check_timeouts()
+show("4. Bengaluru: b1 accepted but didn't buy within 24 hours")
 
-    print("4. HR approves both claims a few days later")
-    w.clock.advance(timedelta(days=4))
-    for c in w.hr.claims:
-        w.hr.approve(c)
-    w.svc.tick()
-    seen = show_new_messages(w, seen)
+counter.accept(blr.id, "b2")
+counter.record_purchase(blr.id, "b2", Money(2400, "INR"), RECEIPT)
+for claim_id in counter.hr.claims:
+    counter.hr.approve(claim_id)
+counter.check_hr()
+show("5. b2 buys, and HR approves both claims")
 
-    print("\n5. Monthly report\n")
-    rep = monthly_report(
-        w.svc.offices.values(), w.svc.volunteers, w.svc.refills.values(), 2026, 11, "EUR",
-        {"NOK": Decimal("0.085"), "INR": Decimal("0.0105")},
-    )
-    print(rep.render())
-
-    print("\nRefill R2 history:")
-    for at, event in r2.history:
-        print(f"  {at:%d %b %H:%M} {event}")
-
-
-if __name__ == "__main__":
-    main()
+print("\n6. Monthly report")
+report = counter.monthly_report(2026, 11, "EUR", {"NOK": Decimal("0.085"), "INR": Decimal("0.0105")})
+for name, amount in report.items():
+    print(f"   {name}: {amount}")

@@ -1,40 +1,31 @@
 # Snack Counter Automation
 
-Coordinates snack-box refills for the Oslo and Bengaluru offices: picks exactly one volunteer who is in the office, gives them a budget cap and deadline, reassigns if they don't follow through, files the HR claim from the receipt, and produces the monthly spend report across both currencies.
+Coordinates snack-box refills for the Oslo and Bengaluru offices: asks exactly one volunteer who is in the office, gives them a spending cap and a deadline, hands the refill on if they don't follow through, sends their HR claim automatically, and produces the monthly spend report across both currencies.
 
 - **Design:** [DESIGN.md](DESIGN.md)
-- **Core logic:** [`snack/`](snack) — Python 3.10+, standard library only
+- **Code:** [`snack/`](snack): Python 3.10+, standard library only
 - **Tests:** [`tests/`](tests)
 
 ## Run
 
 ```bash
-python3 -m unittest discover -s tests -t . -v   # 45 tests
-python3 demo.py                                 # simulated week + monthly report
+python3 -m unittest discover -s tests -t . -v   # 23 tests
+python3 demo.py                                 # walks through a few refills
 ```
 
-## Layout
+## Files
 
-| File | What it does |
+| File | What's in it |
 |---|---|
-| `snack/service.py` | Refill lifecycle state machine and scheduler (`tick`) |
-| `snack/selection.py` | Who gets asked to buy (presence + fair rotation) |
-| `snack/budget.py` | Budget check with reservations, per office currency and local month |
-| `snack/report.py` | Monthly management report with explicit FX rates |
-| `snack/money.py` | Currency-safe decimal money |
-| `snack/ports.py` | Chat, HR, availability, clock interfaces + in-memory fakes |
-| `snack/config.py` | The two offices' budgets and ranges |
+| `snack/service.py` | All the rules: the refill lifecycle, choosing who buys, the budget check, the monthly report |
+| `snack/models.py` | Money, Office, Volunteer, Refill |
+| `snack/fakes.py` | Simulated chat tool, HR system and clock |
 
-## Rules covered by tests
+## Tests
 
-| Rule | Test file |
+| File | Rule it proves |
 |---|---|
-| Two people cannot both commit to the same refill (threaded race) | `test_lifecycle.py` |
-| Duplicate "empty" reports join the open refill | `test_lifecycle.py` |
-| Unanswered / declined offers move to the next person; missed buy deadline releases the buyer | `test_reassignment.py` |
-| Nobody available → broadcast → coordinator escalation (once) | `test_reassignment.py` |
-| Only volunteers present at that office are asked; visitors count; fair rotation | `test_selection.py` |
-| Cap, reservation, exhaustion until next month, over-cap review, wrong-currency receipt | `test_budget.py` |
-| Month boundary in office local time; visitor spend charged to the right office | `test_budget.py` |
-| Per-office totals + converted total; no cross-currency arithmetic; missing rate errors | `test_report_and_hr.py` |
-| HR outage retried without duplicate claims; slow claims nudged; rejections notified | `test_report_and_hr.py` |
+| `test_one_buyer.py` | Two people cannot both commit to the same refill |
+| `test_handover.py` | A refill nobody completes is handed to someone else |
+| `test_choosing_buyer.py` | Only people in the office are asked, and the work rotates fairly |
+| `test_budget.py` | Budgets and totals are correct across both currencies |

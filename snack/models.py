@@ -1,13 +1,53 @@
-"""Domain data: offices, volunteers and the Refill record that moves through the lifecycle."""
+"""The data: money, offices, volunteers and a refill."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from typing import Optional
-from zoneinfo import ZoneInfo
 
-from .money import Money
+
+class CurrencyMismatch(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class Money:
+    """An exact amount in one currency. NOK and INR can never be mixed by accident."""
+
+    amount: Decimal
+    currency: str
+
+    def __post_init__(self):
+        object.__setattr__(self, "amount", Decimal(str(self.amount)).quantize(Decimal("0.01")))
+
+    def _same_currency(self, other: Money):
+        if self.currency != other.currency:
+            raise CurrencyMismatch(f"cannot mix {self.currency} and {other.currency}")
+
+    def __add__(self, other: Money) -> Money:
+        self._same_currency(other)
+        return Money(self.amount + other.amount, self.currency)
+
+    def __sub__(self, other: Money) -> Money:
+        self._same_currency(other)
+        return Money(self.amount - other.amount, self.currency)
+
+    def __lt__(self, other: Money) -> bool:
+        self._same_currency(other)
+        return self.amount < other.amount
+
+    def __gt__(self, other: Money) -> bool:
+        self._same_currency(other)
+        return self.amount > other.amount
+
+    def convert(self, currency: str, rate: Decimal) -> Money:
+        """1 unit of my currency = `rate` units of `currency`."""
+        return Money(self.amount * Decimal(str(rate)), currency)
+
+    def __str__(self):
+        return f"{self.amount:,.2f} {self.currency}"
 
 
 @dataclass(frozen=True)
@@ -15,103 +55,44 @@ class Office:
     id: str
     name: str
     currency: str
-    timezone: str
     monthly_budget: Money
-    min_purchase: Money  # below this a refill is not worth starting
-    max_purchase: Money  # default spending cap handed to a buyer
-    chat_channel: str
-    admin_chat_id: str  # office coordinator: budget exceptions, escalations
-
-    @property
-    def tz(self) -> ZoneInfo:
-        return ZoneInfo(self.timezone)
-
-    def local_date(self, at: datetime) -> date:
-        return at.astimezone(self.tz).date()
+    max_purchase: Money  # spending cap for one refill
+    channel: str  # office chat channel
 
 
 @dataclass(frozen=True)
 class Volunteer:
     id: str
     name: str
-    employee_id: str  # ID the HR system knows
-    chat_id: str
-    home_office: str
-    payroll_currency: str  # HR pays out in this; we only record it
+    employee_id: str  # the ID the HR system knows
 
 
-class RefillState(str, Enum):
-    WAITING_FOR_BUDGET = "waiting_for_budget"  # month's budget used up; resumes next month
-    SEEKING_BUYER = "seeking_buyer"            # offer out to one person, or broadcast to the office
-    COMMITTED = "committed"                    # exactly one buyer, with a deadline and spending cap
-    NEEDS_REVIEW = "needs_review"              # receipt over the cap; coordinator must approve
-    PURCHASED = "purchased"                    # receipt recorded; claim not yet accepted by HR
-    CLAIM_SUBMITTED = "claim_submitted"        # waiting for HR approval (1-10 days)
-    REIMBURSED = "reimbursed"                  # HR approved - done
-    CLAIM_REJECTED = "claim_rejected"          # HR said no - coordinator follows up by hand
-
-
-ACTIVE_STATES = {
-    RefillState.WAITING_FOR_BUDGET,
-    RefillState.SEEKING_BUYER,
-    RefillState.COMMITTED,
-}
-# States where money has actually been spent and counts as the office's spend.
-SPENT_STATES = {
-    RefillState.NEEDS_REVIEW,
-    RefillState.PURCHASED,
-    RefillState.CLAIM_SUBMITTED,
-    RefillState.REIMBURSED,
-}
-# States holding a budget reservation (the cap) but no actual spend yet.
-RESERVED_STATES = {RefillState.SEEKING_BUYER, RefillState.COMMITTED}
-
-
-@dataclass
-class Purchase:
-    amount: Money
-    receipt_image: bytes
-    items: list[str]
-    purchased_at: datetime
+class State(str, Enum):
+    LOOKING_FOR_BUYER = "looking_for_buyer"
+    BUYER_COMMITTED = "buyer_committed"
+    CLAIM_SENT = "claim_sent"
+    REIMBURSED = "reimbursed"
 
 
 @dataclass
 class Refill:
     id: str
     office_id: str
-    reported_by: str
-    reported_at: datetime
-    state: RefillState
-    spend_cap: Optional[Money] = None
-    # buyer search
-    offered_to: Optional[str] = None
-    offer_expires_at: Optional[datetime] = None
-    broadcast: bool = False
-    broadcast_escalated: bool = False
-    passed_over: set[str] = field(default_factory=set)  # declined or timed out
-    # commitment
-    buyer_id: Optional[str] = None
-    buy_deadline: Optional[datetime] = None
-    # outcome
-    purchase: Optional[Purchase] = None
+    state: State
+    cap: Money
+    # while looking for a buyer
+    asked: Optional[str] = None  # volunteer currently asked
+    answer_by: Optional[datetime] = None
+    open_to_all: bool = False  # nobody left to ask -> first to accept gets it
+    skipped: set[str] = field(default_factory=set)  # declined or didn't answer
+    # once someone commits
+    buyer: Optional[str] = None
+    buy_by: Optional[datetime] = None
+    # once bought
+    amount: Optional[Money] = None
+    bought_at: Optional[datetime] = None
     claim_id: Optional[str] = None
-    claim_submitted_at: Optional[datetime] = None
-    claim_nudged: bool = False
-    resolved_at: Optional[datetime] = None
-    history: list[tuple[datetime, str]] = field(default_factory=list)
-
-    def log(self, at: datetime, event: str) -> None:
-        self.history.append((at, event))
-
-    @property
-    def is_active(self) -> bool:
-        return self.state in ACTIVE_STATES
 
 
-@dataclass(frozen=True)
-class Timeouts:
-    offer_response: timedelta = timedelta(hours=2)
-    buy_deadline: timedelta = timedelta(hours=24)
-    broadcast_escalation: timedelta = timedelta(hours=4)
-    claim_nudge_after: timedelta = timedelta(days=7)
-    lookback_for_fairness: timedelta = timedelta(days=90)
+OSLO = Office("oslo", "Oslo", "NOK", Money(6000, "NOK"), Money(1200, "NOK"), "#snacks-oslo")
+BENGALURU = Office("blr", "Bengaluru", "INR", Money(15000, "INR"), Money(3000, "INR"), "#snacks-bengaluru")

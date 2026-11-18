@@ -1,110 +1,87 @@
-"""Budget check: per office, in its own currency, per local calendar month."""
+"""Rule: budgets and totals are correct across both currencies."""
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from decimal import Decimal
 
-from snack import CurrencyMismatch, Money, RefillError, RefillState
+from snack import CurrencyMismatch, Money, RefillError
 
-from .helpers import RECEIPT, World
+from .common import RECEIPT, complete_refill, make_counter
+
+RATES_TO_EUR = {"NOK": Decimal("0.085"), "INR": Decimal("0.0105")}
 
 
 class BudgetTest(unittest.TestCase):
-    def test_cap_is_typical_max_while_budget_allows(self):
-        w = World()
-        self.assertEqual(w.svc.report_empty("oslo", "o1").spend_cap, Money(1200, "NOK"))
-        self.assertEqual(w.svc.report_empty("blr", "b1").spend_cap, Money(3000, "INR"))
+    def test_spending_cap_is_the_typical_maximum(self):
+        counter = make_counter()
+        self.assertEqual(counter.report_empty("oslo").cap, Money(1200, "NOK"))
+        self.assertEqual(counter.report_empty("blr").cap, Money(3000, "INR"))
 
-    def test_cap_shrinks_to_what_is_left(self):
-        w = World()
+    def test_cap_shrinks_to_what_is_left_this_month(self):
+        counter = make_counter()
         for _ in range(4):
-            w.full_refill("oslo", Money(1200, "NOK"))
-        w.full_refill("oslo", Money(500, "NOK"))  # 5300 spent, 700 left
-        r = w.svc.report_empty("oslo", "o1")
-        self.assertEqual(r.spend_cap, Money(700, "NOK"))
+            complete_refill(counter, "oslo", Money(1200, "NOK"))
+        complete_refill(counter, "oslo", Money(500, "NOK"))  # 5,300 of 6,000 spent
+        self.assertEqual(counter.report_empty("oslo").cap, Money(700, "NOK"))
 
-    def test_exhausted_budget_puts_refill_on_hold_until_next_month(self):
-        w = World()
+    def test_no_refill_when_the_budget_is_used_up(self):
+        counter = make_counter()
         for _ in range(5):
-            w.full_refill("oslo", Money(1200, "NOK"))  # exactly 6000 NOK
-        r = w.svc.report_empty("oslo", "o1")
-        self.assertEqual(r.state, RefillState.WAITING_FOR_BUDGET)
-        self.assertIsNone(r.offered_to)
-        self.assertTrue(any("budget exhausted" in m for m in w.chat.to("@oslo-coordinator")))
+            complete_refill(counter, "oslo", Money(1200, "NOK"))  # exactly 6,000
+        self.assertIsNone(counter.report_empty("oslo"))
+        self.assertIn("budget is used up", counter.chat.to("#snacks-oslo")[-1])
 
-        w.svc.tick()
-        self.assertEqual(r.state, RefillState.WAITING_FOR_BUDGET)
-
-        w.clock.set(datetime(2026, 11, 30, 23, 30, tzinfo=timezone.utc))  # 00:30 on 1 Dec in Oslo
-        w.svc.tick()
-        self.assertEqual(r.state, RefillState.SEEKING_BUYER)
-        self.assertEqual(r.spend_cap, Money(1200, "NOK"))
-
-    def test_open_refill_reserves_budget(self):
-        # 4 refills spent = 4800 NOK. An open refill reserving 1200 leaves 0 for a refill elsewhere
-        # in the same office - the reservation stops two in-flight refills overspending together.
-        w = World()
-        for _ in range(4):
-            w.full_refill("oslo", Money(1200, "NOK"))
-        open_refill = w.svc.report_empty("oslo", "o1")
-        self.assertEqual(open_refill.spend_cap, Money(1200, "NOK"))
-        from snack import budget
-        office = w.svc.offices["oslo"]
-        self.assertEqual(budget.remaining(office, w.svc.refills.values(), w.clock.now()), Money(0, "NOK"))
-
-    def test_budgets_are_separate_per_office(self):
-        w = World()
+    def test_budget_resets_next_month(self):
+        counter = make_counter()
         for _ in range(5):
-            w.full_refill("oslo", Money(1200, "NOK"))
-        r = w.svc.report_empty("blr", "b1")
-        self.assertEqual(r.state, RefillState.SEEKING_BUYER)
-        self.assertEqual(r.spend_cap, Money(3000, "INR"))
+            complete_refill(counter, "oslo", Money(1200, "NOK"))
+        counter.clock.now = datetime(2026, 12, 1, 9, 0)
+        self.assertEqual(counter.report_empty("oslo").cap, Money(1200, "NOK"))
 
-    def test_over_cap_receipt_needs_coordinator_before_hr(self):
-        w = World()
-        r = w.svc.report_empty("oslo", "o1")
-        w.svc.accept(r.id, "o1")
-        w.svc.record_purchase(r.id, "o1", Money(1350, "NOK"), RECEIPT)
-        self.assertEqual(r.state, RefillState.NEEDS_REVIEW)
-        self.assertEqual(w.hr.claims, {})
+    def test_offices_have_separate_budgets(self):
+        counter = make_counter()
+        for _ in range(5):
+            complete_refill(counter, "oslo", Money(1200, "NOK"))
+        self.assertEqual(counter.budget_left("blr"), Money(15000, "INR"))
 
+    def test_receipt_over_the_cap_is_refused(self):
+        counter = make_counter()
+        refill = counter.report_empty("oslo")
+        counter.accept(refill.id, "o1")
         with self.assertRaises(RefillError):
-            w.svc.approve_over_cap(r.id, "@o2")  # not the coordinator
-        w.svc.approve_over_cap(r.id, "@oslo-coordinator")
-        self.assertEqual(r.state, RefillState.CLAIM_SUBMITTED)
+            counter.record_purchase(refill.id, "o1", Money(1300, "NOK"), RECEIPT)
 
-    def test_receipt_in_wrong_currency_is_rejected(self):
-        w = World()
-        r = w.svc.report_empty("oslo", "o1")
-        w.svc.accept(r.id, "o1")
+    def test_receipt_in_the_wrong_currency_is_refused(self):
+        counter = make_counter()
+        refill = counter.report_empty("oslo")
+        counter.accept(refill.id, "o1")
         with self.assertRaises(CurrencyMismatch):
-            w.svc.record_purchase(r.id, "o1", Money(800, "INR"), RECEIPT)
+            counter.record_purchase(refill.id, "o1", Money(800, "INR"), RECEIPT)
 
-    def test_month_follows_office_local_time(self):
-        # 30 Nov 19:00 UTC is already 1 Dec 00:30 in Bengaluru.
-        w = World(start=datetime(2026, 11, 30, 18, 0, tzinfo=timezone.utc))
-        r = w.svc.report_empty("blr", "b1")
-        w.svc.accept(r.id, r.offered_to)
-        w.clock.set(datetime(2026, 11, 30, 19, 0, tzinfo=timezone.utc))
-        w.svc.record_purchase(r.id, r.buyer_id, Money(2000, "INR"), RECEIPT)
+    def test_visitor_spend_counts_for_the_office_they_bought_for(self):
+        counter = make_counter()
+        counter.set_in_office("blr", ["o2"])  # Oslo employee visiting Bengaluru
+        refill = complete_refill(counter, "blr", Money(1800, "INR"))
+        self.assertEqual(counter.hr.claims[refill.claim_id]["currency"], "INR")  # HR converts to NOK payroll
+        self.assertEqual(counter.budget_left("blr"), Money(13200, "INR"))
+        self.assertEqual(counter.budget_left("oslo"), Money(6000, "NOK"))
 
-        from snack import budget
-        office = w.svc.offices["blr"]
-        self.assertEqual(budget.spent_in_month(office, w.svc.refills.values(), 2026, 11), Money(0, "INR"))
-        self.assertEqual(budget.spent_in_month(office, w.svc.refills.values(), 2026, 12), Money(2000, "INR"))
+    def test_nok_and_inr_can_never_be_added_directly(self):
+        with self.assertRaises(CurrencyMismatch):
+            Money(100, "NOK") + Money(100, "INR")
 
-    def test_visitor_purchase_charges_the_office_they_bought_for(self):
-        # An Oslo employee (paid in NOK) refills the Bengaluru box during a visit.
-        w = World(present={"blr": ["o2"]})
-        r = w.svc.report_empty("blr", "b1")
-        self.assertEqual(r.offered_to, "o2")
-        w.svc.accept(r.id, "o2")
-        w.svc.record_purchase(r.id, "o2", Money(1800, "INR"), RECEIPT)
+    def test_monthly_report_totals_across_currencies(self):
+        counter = make_counter()
+        complete_refill(counter, "oslo", Money(1000, "NOK"))
+        complete_refill(counter, "oslo", Money(500, "NOK"))
+        complete_refill(counter, "blr", Money(2000, "INR"))
+        complete_refill(counter, "blr", Money(3000, "INR"))
 
-        claim = w.hr.claims[r.claim_id]
-        self.assertEqual((claim.employee_id, claim.currency), ("EMP-O2", "INR"))  # HR converts to NOK payroll
-        from snack import budget
-        blr, oslo = w.svc.offices["blr"], w.svc.offices["oslo"]
-        self.assertEqual(budget.spent_in_month(blr, w.svc.refills.values(), 2026, 11), Money(1800, "INR"))
-        self.assertEqual(budget.spent_in_month(oslo, w.svc.refills.values(), 2026, 11), Money(0, "NOK"))
+        report = counter.monthly_report(2026, 11, "EUR", RATES_TO_EUR)
+
+        self.assertEqual(report["Oslo"], Money(1500, "NOK"))
+        self.assertEqual(report["Bengaluru"], Money(5000, "INR"))
+        # 1,500 x 0.085 = 127.50 EUR, 5,000 x 0.0105 = 52.50 EUR
+        self.assertEqual(report["Total"], Money("180.00", "EUR"))
 
 
 if __name__ == "__main__":
