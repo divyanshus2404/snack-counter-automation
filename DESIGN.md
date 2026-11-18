@@ -43,16 +43,17 @@ States: `LOOKING_FOR_BUYER → BUYER_COMMITTED → CLAIM_SENT → REIMBURSED`
 
 ## Assumptions (and why)
 
-1. **Each office's budget is in its own currency** (Oslo NOK, Bengaluru INR), and receipts must be in that currency. *Why:* that's how the budgets are given, and it avoids exchange-rate errors.
-2. **A visitor's purchase counts against the office they bought for**, and the claim goes to HR in the receipt currency; HR pays them in their payroll currency. *Why:* the snacks are for that office, and the brief says HR reimburses in payroll currency, so conversion is HR's job.
-3. **The combined monthly total uses one exchange rate per currency**, given each month (e.g. by finance). *Why:* NOK and INR can't be added directly, and a stated rate makes the number easy to check.
-4. **We know who is in each office today**, e.g. from a morning "I'm in" chat check-in. *Why:* volunteers are hybrid, so a fixed rota would often pick someone who is at home.
-5. **2 hours to reply, 24 hours to buy.** *Why:* long enough to fit around work, short enough that the box isn't empty for days.
-6. **The typical maximum purchase is the cap for one refill** (1,200 NOK / 3,000 INR), reduced if less budget is left. Receipts over the cap are refused. *Why:* it keeps every refill inside the budget, and the buyer knows the limit before shopping.
-7. **When the monthly budget is used up, the box stays empty until next month.** *Why:* the budget is a limit, not a target.
-8. **"Fair" means fewest refills bought so far.** *Why:* simple to understand and explain, and it spreads the work.
-9. **HR approves claims** (rejections are handled by hand). *Why:* the brief describes approval taking 1–10 days, not rejection.
-10. **Times are each office's local time.** *Why:* "this month" should mean the office's month.
+1. **Anyone can report the box empty**, not just volunteers. *Why:* whoever notices first should be able to say so; the box sitting unnoticed is part of the problem.
+2. **Each office's budget is in its own currency** (Oslo NOK, Bengaluru INR), and receipts must be in that currency. *Why:* that's how the budgets are given, and it avoids exchange-rate errors.
+3. **A visitor's purchase counts against the office they bought for**, and the claim goes to HR in the receipt currency; HR pays them in their payroll currency. *Why:* the snacks are for that office, and the brief says HR reimburses in payroll currency, so conversion is HR's job.
+4. **The combined monthly total uses one exchange rate per currency**, given each month (e.g. by finance). *Why:* NOK and INR can't be added directly, and a stated rate makes the number easy to check.
+5. **We know who is in each office today**, e.g. from a morning "I'm in" chat check-in. *Why:* volunteers are hybrid, so a fixed rota would often pick someone who is at home.
+6. **2 hours to reply, 24 hours to buy.** *Why:* long enough to fit around work, short enough that the box isn't empty for days.
+7. **The typical maximum purchase is the cap for one refill** (1,200 NOK / 3,000 INR), reduced if less budget is left. Receipts over the cap are refused. *Why:* it keeps every refill inside the budget, and the buyer knows the limit before shopping.
+8. **When the monthly budget is used up, the box stays empty until next month.** *Why:* the budget is a limit, not a target.
+9. **"Fair" means fewest refills bought so far.** *Why:* simple to understand and explain, and it spreads the work.
+10. **HR approves claims** (rejections are handled by hand). *Why:* the brief describes approval taking 1–10 days, not rejection.
+11. **Times are each office's local time.** *Why:* "this month" should mean the office's month.
 
 ## Trade-offs
 
